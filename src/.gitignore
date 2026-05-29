@@ -1,0 +1,13 @@
+# Shared generated folders for experiments under src/
+*/node_modules/
+*/dist/
+*/dist-ssr/
+
+# Shared logs for experiments under src/
+*/logs/
+*/*.log
+*/npm-debug.log*
+*/yarn-debug.log*
+*/yarn-error.log*
+*/pnpm-debug.log*
+*/lerna-debug.log*
