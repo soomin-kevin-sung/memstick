@@ -283,6 +283,52 @@ h1 {
   margin: 12px 0;
 }
 
+.table-line {
+  margin: 12px 0;
+}
+
+.table {
+  width: min(100%, 820px);
+  border-collapse: collapse;
+  border: 1px solid #cdbb9f;
+  color: #232019;
+  background: #fff7e8;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.table th,
+.table td {
+  border: 1px solid #cdbb9f;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  background: #eadbc5;
+  color: #5b3a25;
+  font: 800 0.78rem/1.2 "Trebuchet MS", Verdana, sans-serif;
+}
+
+.table td {
+  background: #fffaf0;
+}
+
+.md-element.rendered.table:hover {
+  border-color: #d9c5a8;
+  background: #f1e1c7;
+  box-shadow: 0 0 0 3px #d9c5a8;
+}
+
+.md-element.rendered.table:hover th {
+  background: #dfc9aa;
+}
+
+.md-element.rendered.table:hover td {
+  background: #f4e5cd;
+}
+
 .codeblock {
   display: block;
   overflow: auto;
@@ -351,6 +397,24 @@ h1 {
   color: #232019;
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 0.92rem;
+}
+
+.table-source-run {
+  display: block;
+  color: #232019;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.md-element.editing.table {
+  display: block;
+  overflow: auto;
+  border: 1px solid #d0bda2;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #f6ead5;
 }
 
 .rule-source-run {

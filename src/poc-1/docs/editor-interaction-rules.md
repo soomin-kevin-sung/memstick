@@ -92,6 +92,9 @@ Examples:
   `Backspace`; do not treat list markers as ordinary inline wrappers.
 - Code block contents remain plain text. Markdown inside fenced code blocks is
   never rendered.
+- Tables are block elements. Rendered tables are visual previews only; editing
+  exposes the raw Markdown table source. Cell-level editing, row/column controls,
+  and width resizing are out of scope for the base interaction model.
 - Nested inline elements are out of scope for the first POC. If encountered,
   prefer opening the innermost leaf element or treating the nested inline span as
   one editing range.

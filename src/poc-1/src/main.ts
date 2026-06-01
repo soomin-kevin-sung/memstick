@@ -3,6 +3,7 @@ type ElementType =
   | "blockquote"
   | "rule"
   | "codeblock"
+  | "table"
   | "bold"
   | "italic"
   | "strike"
@@ -42,6 +43,11 @@ const sampleMarkdown = [
   "Try `inline code`, *italic text*, ~~struck text~~, and [a link](https://tauri.app).",
   "",
   "> Blockquotes should open just like headings.",
+  "",
+  "| Name | Role | Status |",
+  "| --- | --- | --- |",
+  "| Sumin | Developer | Writing |",
+  "| Codex | Agent | Reviewing |",
   "",
   "---",
   "",
@@ -174,6 +180,29 @@ function parseMarkdown(source: string): MarkdownElement[] {
       }
     }
 
+    if (isTableHeaderLine(line) && lines[index + 1] && isTableDelimiterLine(lines[index + 1].text)) {
+      let tableEndIndex = index + 1;
+      for (let next = index + 2; next < lines.length; next += 1) {
+        if (!isTableRowLine(lines[next].text)) {
+          break;
+        }
+        tableEndIndex = next;
+      }
+
+      const tableEnd = lines[tableEndIndex].end;
+      parsed.push({
+        id: `table:${lineStart}:${tableEnd}`,
+        type: "table",
+        start: lineStart,
+        end: tableEnd,
+        contentStart: lineStart,
+        contentEnd: tableEnd,
+        text: source.slice(lineStart, tableEnd),
+      });
+      index = tableEndIndex;
+      continue;
+    }
+
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     const blockquote = /^>\s?(.+)$/.exec(line);
     const rule = /^(?:-{3,}|\*{3,}|_{3,})\s*$/.exec(line);
@@ -247,6 +276,31 @@ function getSourceLineAt(index: number): { text: string; start: number; end: num
 
 function isHorizontalRuleSource(text: string): boolean {
   return /^(?:-{3,}|\*{3,}|_{3,})\s*$/.test(text);
+}
+
+function isTableHeaderLine(text: string): boolean {
+  return isTableRowLine(text) && splitTableRow(text).length >= 2;
+}
+
+function isTableDelimiterLine(text: string): boolean {
+  if (!isTableRowLine(text)) {
+    return false;
+  }
+
+  return splitTableRow(text).every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function isTableRowLine(text: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(text);
+}
+
+function splitTableRow(text: string): string[] {
+  return text
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
 }
 
 function parseInlineMarkdown(
@@ -387,9 +441,9 @@ function renderLines(): string {
     const { start, end } = lines[index];
     const block = findLineBlockAt(start);
 
-    if (block?.type === "codeblock") {
+    if (block?.type === "codeblock" || block?.type === "table") {
       html.push(
-        `<div class="editor-line codeblock-line" data-line-start="${start}" data-line-end="${block.end}">${
+        `<div class="editor-line ${block.type}-line" data-line-start="${start}" data-line-end="${block.end}">${
           activeElementIds.has(block.id) ? renderEditingElement(block) : renderRenderedElement(block)
         }</div>`,
       );
@@ -486,6 +540,10 @@ function renderRenderedElement(element: MarkdownElement): string {
     )}</code></pre>`;
   }
 
+  if (element.type === "table") {
+    return renderTableElement(element, common);
+  }
+
   if (element.type === "bold") {
     return `<strong class="md-element rendered inline bold" ${common}>${text}</strong>`;
   }
@@ -505,6 +563,24 @@ function renderRenderedElement(element: MarkdownElement): string {
   return `<span class="md-element rendered inline link" title="${escapeHtml(
     element.url ?? "",
   )}" ${common}>${text}</span>`;
+}
+
+function renderTableElement(element: MarkdownElement, common: string): string {
+  const lines = element.text.split("\n").filter(Boolean);
+  const header = splitTableRow(lines[0] ?? "");
+  const rows = lines.slice(2).map(splitTableRow);
+  const columnCount = Math.max(header.length, ...rows.map((row) => row.length));
+
+  const renderCell = (value: string, tag: "td" | "th") =>
+    `<${tag}>${escapeHtml(value)}</${tag}>`;
+  const padRow = (row: string[]) =>
+    Array.from({ length: columnCount }, (_, index) => row[index] ?? "");
+
+  return `<table class="md-element rendered table" ${common}><thead><tr>${padRow(header)
+    .map((cell) => renderCell(cell, "th"))
+    .join("")}</tr></thead><tbody>${rows
+    .map((row) => `<tr>${padRow(row).map((cell) => renderCell(cell, "td")).join("")}</tr>`)
+    .join("")}</tbody></table>`;
 }
 
 function renderEditingElement(element: MarkdownElement): string {
@@ -544,6 +620,14 @@ function renderEditingElement(element: MarkdownElement): string {
       element.language,
       "codeblock-source-run",
     )}${renderToken(markdown.slice(element.contentEnd, element.end), element.contentEnd)}</span>`;
+  }
+
+  if (element.type === "table") {
+    return `<span ${common}>${renderSourceRun(
+      markdown.slice(element.start, element.end),
+      element.start,
+      "table-source-run",
+    )}</span>`;
   }
 
   if (element.type === "bold" || element.type === "strike") {
@@ -1229,6 +1313,7 @@ function findLineBlockAt(start: number): MarkdownElement | null {
       (element) =>
         (element.type === "blockquote" ||
           element.type === "rule" ||
+          element.type === "table" ||
           element.type === "codeblock") &&
         element.start === start,
     ) ?? null
