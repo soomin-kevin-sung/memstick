@@ -30,6 +30,11 @@ type SourceSelection = {
   collapsed: boolean;
 };
 
+type CodeToken = {
+  text: string;
+  className?: string;
+};
+
 const sampleMarkdown = [
   "# Memstick editor POC",
   "",
@@ -533,9 +538,10 @@ function renderEditingElement(element: MarkdownElement): string {
     return `<span ${common}>${renderToken(
       markdown.slice(element.start, element.contentStart),
       element.start,
-    )}${renderSourceRun(
+    )}${renderHighlightedSourceRun(
       element.text,
       element.contentStart,
+      element.language,
       "codeblock-source-run",
     )}${renderToken(markdown.slice(element.contentEnd, element.end), element.contentEnd)}</span>`;
   }
@@ -587,11 +593,41 @@ function renderSourceRun(value: string, start: number, className = ""): string {
   }">${escapeHtml(value)}</span>`;
 }
 
+function renderHighlightedSourceRun(
+  value: string,
+  start: number,
+  language = "",
+  className = "",
+): string {
+  let cursor = start;
+
+  return tokenizeCode(value, language)
+    .map((token) => {
+      const classes = ["source-run", className, token.className].filter(Boolean).join(" ");
+      const html = `<span class="${classes}" data-start="${cursor}" data-end="${
+        cursor + token.text.length
+      }">${escapeHtml(token.text)}</span>`;
+      cursor += token.text.length;
+      return html;
+    })
+    .join("");
+}
+
 function highlightCode(value: string, language = ""): string {
+  return tokenizeCode(value, language)
+    .map((token) =>
+      token.className
+        ? `<span class="${token.className}">${escapeHtml(token.text)}</span>`
+        : escapeHtml(token.text),
+    )
+    .join("");
+}
+
+function tokenizeCode(value: string, language = ""): CodeToken[] {
   const normalizedLanguage = language.toLowerCase();
 
   if (["ts", "tsx", "js", "jsx", "javascript", "typescript"].includes(normalizedLanguage)) {
-    return highlightWithPattern(
+    return tokenizeWithPattern(
       value,
       /(\/\/.*|\/\*[\s\S]*?\*\/|(["'`])(?:\\.|(?!\2)[\s\S])*\2|\b(?:async|await|break|case|catch|class|const|continue|default|else|export|extends|false|for|from|function|if|import|interface|let|new|null|return|throw|true|try|type|undefined|var|while)\b|\b\d+(?:\.\d+)?\b)/g,
       classifyScriptToken,
@@ -599,7 +635,7 @@ function highlightCode(value: string, language = ""): string {
   }
 
   if (normalizedLanguage === "json") {
-    return highlightWithPattern(
+    return tokenizeWithPattern(
       value,
       /("(?:\\.|[^"\\])*")(\s*:)?|\b(?:true|false|null)\b|-?\b\d+(?:\.\d+)?\b/g,
       (token) => {
@@ -614,27 +650,32 @@ function highlightCode(value: string, language = ""): string {
     );
   }
 
-  return escapeHtml(value);
+  return [{ text: value }];
 }
 
-function highlightWithPattern(
+function tokenizeWithPattern(
   value: string,
   pattern: RegExp,
   classify: (token: string) => string,
-): string {
-  let html = "";
+): CodeToken[] {
+  const tokens: CodeToken[] = [];
   let cursor = 0;
 
   for (const match of value.matchAll(pattern)) {
     const token = match[0];
     const index = match.index ?? cursor;
-    html += escapeHtml(value.slice(cursor, index));
-    html += `<span class="${classify(token)}">${escapeHtml(token)}</span>`;
+    if (index > cursor) {
+      tokens.push({ text: value.slice(cursor, index) });
+    }
+    tokens.push({ text: token, className: classify(token) });
     cursor = index + token.length;
   }
 
-  html += escapeHtml(value.slice(cursor));
-  return html;
+  if (cursor < value.length) {
+    tokens.push({ text: value.slice(cursor) });
+  }
+
+  return tokens;
 }
 
 function classifyScriptToken(token: string): string {
@@ -675,6 +716,21 @@ function handleKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     activeElementIds.clear();
     render(selection.start);
+    return;
+  }
+
+  if (
+    (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+    selection.collapsed &&
+    !event.shiftKey &&
+    moveOutOfActiveRule(event.key, selection.start)
+  ) {
+    event.preventDefault();
+    return;
+  }
+
+  if (isArrowNavigationKey(event.key) && selection.collapsed && !event.shiftKey) {
+    queueArrowNavigation(event.key);
     return;
   }
 
@@ -727,6 +783,118 @@ function handleKeydown(event: KeyboardEvent): void {
 
   const inserted = event.key === "Enter" ? "\n" : event.key === "Tab" ? "  " : event.key;
   replaceRange(index, index, inserted);
+}
+
+function moveOutOfActiveRule(key: "ArrowUp" | "ArrowDown", index: number): boolean {
+  const activeRule = elements.find(
+    (element) =>
+      element.type === "rule" &&
+      activeElementIds.has(element.id) &&
+      index >= element.start &&
+      index <= element.end,
+  );
+
+  if (!activeRule) {
+    return false;
+  }
+
+  const lines = getSourceLines(markdown);
+  const lineIndex = lines.findIndex((line) => line.start === activeRule.start);
+  const targetLine = key === "ArrowUp" ? lines[lineIndex - 1] : lines[lineIndex + 1];
+
+  if (!targetLine) {
+    return false;
+  }
+
+  activeElementIds.clear();
+  render(key === "ArrowUp" ? targetLine.end : targetLine.start);
+  return true;
+}
+
+function isArrowNavigationKey(
+  key: string,
+): key is "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" {
+  return key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown";
+}
+
+function queueArrowNavigation(key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"): void {
+  window.requestAnimationFrame(() => {
+    activateElementFromArrowNavigation(key);
+  });
+}
+
+function activateElementFromArrowNavigation(
+  key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown",
+): void {
+  if (!editorEl || document.activeElement !== editorEl || isRendering || isComposing) {
+    return;
+  }
+
+  const selection = readSelection();
+  if (!selection || !selection.collapsed) {
+    return;
+  }
+
+  const index = selection.start;
+  const boundaryHit = findElementFromArrowBoundary(index, key);
+
+  if (!boundaryHit || activeElementIds.has(boundaryHit.element.id)) {
+    return;
+  }
+
+  activeElementIds = new Set([boundaryHit.element.id]);
+  render(boundaryHit.caret);
+}
+
+function findElementFromArrowBoundary(
+  index: number,
+  key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown",
+): { element: MarkdownElement; caret: number } | null {
+  if (key === "ArrowRight") {
+    const element = findElementAtBoundary(index, "right") ?? findElementAfterLineBreakBoundary(index);
+    return element ? { element, caret: element.contentStart } : null;
+  }
+
+  if (key === "ArrowLeft") {
+    const element = findElementAtBoundary(index, "left") ?? findElementBeforeLineBreakBoundary(index);
+    return element ? { element, caret: element.contentEnd } : null;
+  }
+
+  const rightElement = findElementAtBoundary(index, "right");
+  if (rightElement) {
+    return { element: rightElement, caret: rightElement.contentStart };
+  }
+
+  const leftElement = findElementAtBoundary(index, "left");
+  if (leftElement) {
+    return { element: leftElement, caret: leftElement.contentEnd };
+  }
+
+  return null;
+}
+
+function findElementAfterLineBreakBoundary(index: number): MarkdownElement | null {
+  return (
+    elements.find((element) => {
+      if (element.start <= index) {
+        return false;
+      }
+
+      return markdown.slice(index, element.start) === "\n";
+    }) ?? null
+  );
+}
+
+function findElementBeforeLineBreakBoundary(index: number): MarkdownElement | null {
+  return (
+    [...elements].reverse().find((element) => {
+      if (element.end >= index) {
+        return false;
+      }
+
+      return markdown.slice(element.end, index) === "\n";
+    }) ?? null
+  );
 }
 
 function commitHorizontalRuleAtCaret(index: number): boolean {

@@ -326,6 +326,26 @@ h1 {
   color: #7fbbb3;
 }
 
+.md-element.editing.codeblock .syntax-keyword {
+  color: #9a5f00;
+}
+
+.md-element.editing.codeblock .syntax-string {
+  color: #55792f;
+}
+
+.md-element.editing.codeblock .syntax-number {
+  color: #9a4c2b;
+}
+
+.md-element.editing.codeblock .syntax-comment {
+  color: #847667;
+}
+
+.md-element.editing.codeblock .syntax-key {
+  color: #2f6f74;
+}
+
 .codeblock-source-run {
   display: inline-block;
   color: #232019;
