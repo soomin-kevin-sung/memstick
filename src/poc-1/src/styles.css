@@ -250,6 +250,47 @@ h1 {
   text-underline-offset: 3px;
 }
 
+.md-element.rendered.listItem {
+  display: inline-grid;
+  grid-template-columns: 1.2rem minmax(0, 1fr);
+  column-gap: 0.38rem;
+  align-items: start;
+  margin-left: calc(var(--list-indent, 0) * 1.35rem);
+  vertical-align: top;
+}
+
+.md-element.rendered.listItem .list-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.65em;
+  color: #8a3f29;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  font-weight: 800;
+  text-align: center;
+}
+
+.md-element.rendered.list-unordered .list-marker::before {
+  content: "";
+  width: 0.34rem;
+  height: 0.34rem;
+  border-radius: 50%;
+  background: #8a3f29;
+}
+
+.md-element.rendered.list-ordered .list-marker {
+  display: block;
+  color: #6f4b2d;
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.65;
+  text-align: right;
+}
+
+.md-element.rendered.listItem .list-content {
+  min-width: 0;
+}
+
 .image {
   display: inline;
 }

@@ -97,8 +97,10 @@ Examples:
   marker while editing.
 - Horizontal rules follow the normal line-level element rules and expose their
   marker text while editing.
-- Lists need dedicated behavior for `Enter`, `Tab`, `Shift+Tab`, and empty-item
-  `Backspace`; do not treat list markers as ordinary inline wrappers.
+- Lists are line-level elements. While editing, the source marker is exposed in
+  place. `Enter` continues the list, `Enter` on an empty item exits the list,
+  `Shift+Enter` inserts an indented continuation line inside the current item,
+  and `Tab` / `Shift+Tab` adjust indentation.
 - Code block contents remain plain text. Markdown inside fenced code blocks is
   never rendered.
 - Tables are block elements. Rendered tables are visual previews only; editing

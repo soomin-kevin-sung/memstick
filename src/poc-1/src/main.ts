@@ -5,6 +5,7 @@ import type { DragDropEvent } from "@tauri-apps/api/window";
 type ElementType =
   | "heading"
   | "blockquote"
+  | "listItem"
   | "rule"
   | "codeblock"
   | "table"
@@ -25,6 +26,8 @@ type MarkdownElement = {
   text: string;
   level?: number;
   language?: string;
+  listKind?: "ordered" | "unordered";
+  listMarker?: string;
   urlStart?: number;
   urlEnd?: number;
   url?: string;
@@ -65,6 +68,11 @@ const sampleMarkdown = [
   "![Memstick sample](https://placehold.co/480x220/png?text=Memstick+Image)",
   "",
   "> Blockquotes should open just like headings.",
+  "",
+  "- List items render as familiar Markdown bullets.",
+  "- Press Enter at the end to continue the list.",
+  "1. Ordered items keep their visible marker.",
+  "2. Their source opens in place when edited.",
   "",
   "| Name | Role | Status |",
   "| --- | --- | --- |",
@@ -247,6 +255,7 @@ function parseMarkdown(source: string): MarkdownElement[] {
 
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     const blockquote = /^>\s?(.+)$/.exec(line);
+    const listItem = matchListItemSource(line);
     const rule = /^(?:-{3,}|\*{3,}|_{3,})\s*$/.exec(line);
 
     if (heading) {
@@ -274,6 +283,32 @@ function parseMarkdown(source: string): MarkdownElement[] {
         contentEnd: lineEnd,
         text: source.slice(contentStart, lineEnd),
       });
+    } else if (listItem) {
+      const [, indent, marker, spacing] = listItem;
+      const contentStart = lineStart + indent.length + marker.length + spacing.length;
+      let itemEndIndex = index;
+      const continuationIndent = indent.length + marker.length + spacing.length;
+
+      for (let next = index + 1; next < lines.length; next += 1) {
+        if (!isListContinuationLine(lines[next].text, continuationIndent)) {
+          break;
+        }
+        itemEndIndex = next;
+      }
+
+      const itemEnd = lines[itemEndIndex].end;
+      parsed.push({
+        id: `listItem:${lineStart}:${itemEnd}`,
+        type: "listItem",
+        start: lineStart,
+        end: itemEnd,
+        contentStart,
+        contentEnd: itemEnd,
+        text: source.slice(contentStart, itemEnd),
+        listKind: /^\d/.test(marker) ? "ordered" : "unordered",
+        listMarker: marker,
+      });
+      index = itemEndIndex;
     } else if (rule) {
       parsed.push({
         id: `rule:${lineStart}:${lineEnd}`,
@@ -318,6 +353,18 @@ function getSourceLineAt(index: number): { text: string; start: number; end: num
 
 function isHorizontalRuleSource(text: string): boolean {
   return /^(?:-{3,}|\*{3,}|_{3,})\s*$/.test(text);
+}
+
+function matchListItemSource(text: string): RegExpExecArray | null {
+  return /^(\s*)((?:[-+*])|(?:\d+[.)]))(\s+)(.*)$/.exec(text);
+}
+
+function isListContinuationLine(text: string, indentation: number): boolean {
+  if (text.length === 0 || matchListItemSource(text)) {
+    return false;
+  }
+
+  return new RegExp(`^\\s{${indentation},}`).test(text);
 }
 
 function isTableHeaderLine(text: string): boolean {
@@ -515,7 +562,7 @@ function renderLines(): string {
     const { start, end } = lines[index];
     const block = findLineBlockAt(start);
 
-    if (block?.type === "codeblock" || block?.type === "table") {
+    if (block?.type === "codeblock" || block?.type === "table" || block?.type === "listItem") {
       html.push(
         `<div class="editor-line ${block.type}-line" data-line-start="${start}" data-line-end="${block.end}">${
           activeElementIds.has(block.id) ? renderEditingElement(block) : renderRenderedElement(block)
@@ -668,6 +715,10 @@ function renderRenderedElement(element: MarkdownElement): string {
     return `<blockquote class="md-element rendered blockquote" ${common}>${text}</blockquote>`;
   }
 
+  if (element.type === "listItem") {
+    return renderListItemElement(element, common);
+  }
+
   if (element.type === "rule") {
     return `<span class="md-element rendered rule" ${common} aria-label="Horizontal rule"></span>`;
   }
@@ -726,6 +777,16 @@ function renderTableElement(element: MarkdownElement, common: string): string {
     .join("")}</tbody></table>`;
 }
 
+function renderListItemElement(element: MarkdownElement, common: string): string {
+  const isOrdered = element.listKind === "ordered";
+  const marker = isOrdered ? element.listMarker ?? "1." : "";
+  const indent = Math.floor((markdown.slice(element.start, element.contentStart).match(/^ */)?.[0].length ?? 0) / 2);
+
+  return `<span class="md-element rendered listItem list-${isOrdered ? "ordered" : "unordered"}" style="--list-indent: ${indent}" ${common}><span class="list-marker" aria-hidden="true">${escapeHtml(
+    marker,
+  )}</span><span class="list-content">${escapeHtml(element.text)}</span></span>`;
+}
+
 function renderEditingElement(element: MarkdownElement): string {
   const editingClasses = ["md-element", "editing", element.type];
   if (element.type === "heading" && element.level) {
@@ -736,7 +797,7 @@ function renderEditingElement(element: MarkdownElement): string {
     element.id,
   )}" data-full-start="${element.start}" data-full-end="${element.end}"`;
 
-  if (element.type === "heading" || element.type === "blockquote") {
+  if (element.type === "heading" || element.type === "blockquote" || element.type === "listItem") {
     const tokenEnd = element.contentStart;
     return `<span ${common}>${renderToken(markdown.slice(element.start, tokenEnd), element.start)}${renderSourceRun(
       element.text,
@@ -1008,7 +1069,19 @@ function handleKeydown(event: KeyboardEvent): void {
     return;
   }
 
+  if (event.key === "Enter" && handleListEnter(index, event.shiftKey)) {
+    return;
+  }
+
+  if (event.key === "Tab" && handleListIndent(index, event.shiftKey)) {
+    return;
+  }
+
   if (event.key === "Backspace") {
+    if (handleEmptyListBackspace(index)) {
+      return;
+    }
+
     const leftElement = findElementAtBoundary(index, "left");
     if (leftElement && !activeElementIds.has(leftElement.id)) {
       activeElementIds.add(leftElement.id);
@@ -1199,6 +1272,92 @@ function commitHorizontalRuleAtCaret(index: number): boolean {
   activeElementIds.clear();
   render(nextCaret);
   return true;
+}
+
+function handleListEnter(index: number, softBreak: boolean): boolean {
+  const item = findActiveListItemAt(index);
+  if (!item) {
+    return false;
+  }
+
+  if (softBreak) {
+    replaceRange(index, index, `\n${listContinuationIndentSource(item)}`);
+    return true;
+  }
+
+  if (item.text.trim().length === 0) {
+    markdown = `${markdown.slice(0, item.start)}${markdown.slice(item.end)}`;
+    activeElementIds.clear();
+    render(item.start);
+    return true;
+  }
+
+  replaceRange(index, index, `\n${nextListMarkerSource(item)}`);
+  return true;
+}
+
+function listContinuationIndentSource(item: MarkdownElement): string {
+  return " ".repeat(item.contentStart - item.start);
+}
+
+function handleListIndent(index: number, outdent: boolean): boolean {
+  const item = findActiveListItemAt(index);
+  if (!item) {
+    return false;
+  }
+
+  const markerSource = markdown.slice(item.start, item.contentStart);
+  const indentLength = markerSource.match(/^ */)?.[0].length ?? 0;
+
+  if (outdent) {
+    const removeCount = Math.min(2, indentLength);
+    if (removeCount === 0) {
+      return true;
+    }
+
+    markdown = `${markdown.slice(0, item.start)}${markdown.slice(item.start + removeCount)}`;
+    renderAfterListMutation(Math.max(item.start, index - removeCount));
+    return true;
+  }
+
+  markdown = `${markdown.slice(0, item.start)}  ${markdown.slice(item.start)}`;
+  renderAfterListMutation(index + 2);
+  return true;
+}
+
+function handleEmptyListBackspace(index: number): boolean {
+  const item = findActiveListItemAt(index);
+  if (!item || index !== item.contentStart || item.text.length > 0) {
+    return false;
+  }
+
+  markdown = `${markdown.slice(0, item.start)}${markdown.slice(item.end)}`;
+  activeElementIds.clear();
+  render(item.start);
+  return true;
+}
+
+function nextListMarkerSource(item: MarkdownElement): string {
+  const markerSource = markdown.slice(item.start, item.contentStart);
+  const ordered = /^(\s*)(\d+)([.)])(\s*)$/.exec(markerSource);
+  if (!ordered) {
+    return markerSource;
+  }
+
+  const [, indent, number, delimiter, spacing] = ordered;
+  return `${indent}${Number(number) + 1}${delimiter}${spacing || " "}`;
+}
+
+function renderAfterListMutation(caret: number): void {
+  const nextElements = parseMarkdown(markdown);
+  const nextItem = nextElements.find(
+    (element) =>
+      element.type === "listItem" &&
+      caret >= element.start &&
+      caret <= element.end,
+  );
+  activeElementIds = new Set(nextItem ? [nextItem.id] : []);
+  render(caret);
 }
 
 function completeActiveRuleOnCaretLeave(caret: number): boolean {
@@ -1669,6 +1828,7 @@ function findLineBlockAt(start: number): MarkdownElement | null {
     elements.find(
       (element) =>
         (element.type === "blockquote" ||
+          element.type === "listItem" ||
           element.type === "rule" ||
           element.type === "table" ||
           element.type === "codeblock") &&
@@ -1712,6 +1872,18 @@ function findElementForCaret(index: number): MarkdownElement | null {
   );
 
   return activeElement ?? findElementContaining(index);
+}
+
+function findActiveListItemAt(index: number): MarkdownElement | null {
+  return (
+    elements.find(
+      (element) =>
+        element.type === "listItem" &&
+        activeElementIds.has(element.id) &&
+        index >= element.start &&
+        index <= element.end,
+    ) ?? null
+  );
 }
 
 function updateStatus(message?: string): void {
