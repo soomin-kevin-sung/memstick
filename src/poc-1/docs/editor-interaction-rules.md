@@ -82,6 +82,15 @@ Examples:
 - Inline code content is not parsed as Markdown while rendered or editing.
 - Links open in `Editing` on normal click and should expose `[text](url)`.
 - Links may use `Ctrl+Click` or a separate affordance to open the target URL.
+- Images follow Markdown viewer semantics as inline elements. A standalone image
+  line may visually occupy its own line, but it uses the normal inline editing
+  model. While editing, the image exposes its original `![alt](url)` Markdown
+  source in place, just like other source-backed inline elements.
+- Local image insertion always stores a Markdown path relative to the document.
+  If the image is already inside the project, keep it in place and normalize the
+  path. If it is outside the project, copy it into a sibling `assets/` directory
+  first. Unsaved documents must be saved before local image insertion can become
+  permanent.
 - Headings follow the normal rules. An empty heading may remove its marker on the
   second `Backspace`.
 - Blockquotes follow the normal line-level element rules and expose the `>`

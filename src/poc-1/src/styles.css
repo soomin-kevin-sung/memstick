@@ -250,6 +250,62 @@ h1 {
   text-underline-offset: 3px;
 }
 
+.image {
+  display: inline;
+}
+
+.image-broken {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 18rem);
+  border: 1px dashed #b8ad9d;
+  border-radius: 4px;
+  padding: 0.08rem 0.34rem 0.12rem;
+  color: #6f665b;
+  background: #eee7dc;
+  font: 0.82rem/1.35 "Cascadia Code", Consolas, monospace;
+  vertical-align: middle;
+}
+
+.image-broken::before {
+  content: none;
+}
+
+.image-broken::after {
+  content: attr(data-alt);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-preview img {
+  max-width: 100%;
+  height: auto;
+  max-height: 24rem;
+  border: 1px solid #d0bda2;
+  border-radius: 4px;
+  vertical-align: middle;
+  background: #fffaf0;
+}
+
+.image-broken img {
+  display: none;
+}
+
+.md-element.rendered.image:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.md-element.rendered.image-broken:hover {
+  background: #e4dccf;
+  box-shadow: 0 0 0 2px #cfc2af;
+}
+
+.md-element.rendered.image:hover img {
+  box-shadow: 0 0 0 3px #d9c5a8;
+}
+
 .blockquote {
   display: block;
   margin: 4px 0 8px;

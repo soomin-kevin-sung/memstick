@@ -1,3 +1,7 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { DragDropEvent } from "@tauri-apps/api/window";
+
 type ElementType =
   | "heading"
   | "blockquote"
@@ -8,6 +12,7 @@ type ElementType =
   | "italic"
   | "strike"
   | "code"
+  | "image"
   | "link";
 
 type MarkdownElement = {
@@ -36,11 +41,28 @@ type CodeToken = {
   className?: string;
 };
 
+type EditorContext = {
+  documentPath: string | null;
+  projectRoot: string | null;
+};
+
+type PreparedImageAsset = {
+  markdownPath: string;
+  copied: boolean;
+};
+
+type ResolvedImageSource = {
+  src: string;
+};
+
 const sampleMarkdown = [
   "# Memstick editor POC",
   "",
   "This surface keeps **Markdown source** and rendered text in the same place.",
-  "Try `inline code`, *italic text*, ~~struck text~~, and [a link](https://tauri.app).",
+  "Try `inline code`, *italic text*, ~~struck text~~, [a link](https://tauri.app), and ![inline badge](https://img.shields.io/badge/image-inline-8a3f29).",
+  "Broken image fallback: ![missing image](https://example.invalid/missing-image.png)",
+  "A standalone image still follows inline Markdown semantics:",
+  "![Memstick sample](https://placehold.co/480x220/png?text=Memstick+Image)",
   "",
   "> Blockquotes should open just like headings.",
   "",
@@ -69,6 +91,8 @@ let isComposing = false;
 let compositionRange: SourceSelection | null = null;
 let pendingCompositionText = "";
 let pendingSelectionSync = 0;
+let editorContext: EditorContext = { documentPath: null, projectRoot: null };
+const imageSourceCache = new Map<string, string>();
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -129,6 +153,8 @@ if (app) {
   editorEl?.addEventListener("beforeinput", handleBeforeInput);
   editorEl?.addEventListener("pointerdown", handlePointerDown);
   editorEl?.addEventListener("paste", handlePaste);
+  editorEl?.addEventListener("dragover", handleDragOver);
+  editorEl?.addEventListener("drop", handleBrowserDrop);
   editorEl?.addEventListener("compositionstart", () => {
     isComposing = true;
     compositionRange = readSelection();
@@ -143,6 +169,22 @@ if (app) {
   document.addEventListener("selectionchange", queueSelectionSync);
 
   render(0);
+  void initializeLocalImageHandling();
+}
+
+async function initializeLocalImageHandling(): Promise<void> {
+  if (!isTauri()) {
+    return;
+  }
+
+  try {
+    editorContext = await invoke<EditorContext>("editor_context");
+    await getCurrentWindow().onDragDropEvent((event) => {
+      void handleTauriDragDrop(event.payload);
+    });
+  } catch (error) {
+    updateStatus(`Image assets unavailable: ${String(error)}`);
+  }
 }
 
 function parseMarkdown(source: string): MarkdownElement[] {
@@ -314,6 +356,7 @@ function parseInlineMarkdown(
   while (cursor < lineEnd) {
     const rest = source.slice(cursor, lineEnd);
     const candidates = [
+      matchImage(source, cursor, lineEnd),
       matchLink(source, cursor, lineEnd),
       matchWrapped(source, cursor, lineEnd, "~~", "strike"),
       matchWrapped(source, cursor, lineEnd, "**", "bold"),
@@ -338,6 +381,36 @@ function parseInlineMarkdown(
   }
 
   return parsed;
+}
+
+function matchImage(source: string, from: number, limit: number): MarkdownElement | null {
+  const marker = source.indexOf("![", from);
+  if (marker < 0 || marker >= limit) {
+    return null;
+  }
+
+  const close = source.indexOf("](", marker + 2);
+  if (close < 0 || close >= limit) {
+    return null;
+  }
+
+  const urlEnd = source.indexOf(")", close + 2);
+  if (urlEnd < 0 || urlEnd >= limit) {
+    return null;
+  }
+
+  return {
+    id: `image:${marker}:${urlEnd + 1}`,
+    type: "image",
+    start: marker,
+    end: urlEnd + 1,
+    contentStart: marker + 2,
+    contentEnd: close,
+    text: source.slice(marker + 2, close),
+    urlStart: close + 2,
+    urlEnd,
+    url: source.slice(close + 2, urlEnd),
+  };
 }
 
 function matchWrapped(
@@ -421,6 +494,7 @@ function render(selectionStart?: number, selectionEnd = selectionStart): void {
   );
 
   editorEl.innerHTML = renderLines();
+  bindImageFallbacks();
   if (sourceEl) {
     sourceEl.textContent = markdown;
   }
@@ -459,6 +533,70 @@ function renderLines(): string {
   }
 
   return html.join("");
+}
+
+function bindImageFallbacks(): void {
+  if (!editorEl) {
+    return;
+  }
+
+  editorEl.querySelectorAll<HTMLImageElement>(".image-preview img").forEach((image) => {
+    const wrapper = image.closest<HTMLElement>(".image-preview");
+    if (!wrapper) {
+      return;
+    }
+
+    const markdownPath = wrapper.dataset.url;
+    if (markdownPath && isTauri()) {
+      void resolveLocalImageSource(markdownPath).then((src) => {
+        if (src) {
+          image.src = src;
+        }
+      });
+    }
+
+    image.addEventListener("load", () => {
+      wrapper.classList.remove("image-broken");
+    });
+    image.addEventListener("error", () => {
+      wrapper.classList.add("image-broken");
+    });
+
+    if (image.complete && image.naturalWidth === 0) {
+      wrapper.classList.add("image-broken");
+    }
+  });
+}
+
+async function resolveLocalImageSource(markdownPath: string): Promise<string | null> {
+  if (
+    !markdownPath ||
+    markdownPath.startsWith("http://") ||
+    markdownPath.startsWith("https://") ||
+    markdownPath.startsWith("data:")
+  ) {
+    return null;
+  }
+
+  const cacheKey = `${editorContext.documentPath ?? ""}:${markdownPath}`;
+  const cached = imageSourceCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const resolved = await invoke<ResolvedImageSource | null>("resolve_markdown_image_src", {
+      markdownPath,
+      documentPath: editorContext.documentPath,
+    });
+    if (!resolved?.src) {
+      return null;
+    }
+    imageSourceCache.set(cacheKey, resolved.src);
+    return resolved.src;
+  } catch {
+    return null;
+  }
 }
 
 function renderLine(start: number, end: number): string {
@@ -516,6 +654,7 @@ function renderRenderedElement(element: MarkdownElement): string {
     `data-end="${element.contentEnd}"`,
     `data-full-start="${element.start}"`,
     `data-full-end="${element.end}"`,
+    element.urlEnd === undefined ? "" : `data-url-end="${element.urlEnd}"`,
     `data-rendered="true"`,
   ].join(" ");
 
@@ -558,6 +697,10 @@ function renderRenderedElement(element: MarkdownElement): string {
 
   if (element.type === "code") {
     return `<code class="md-element rendered inline code" ${common}>${text}</code>`;
+  }
+
+  if (element.type === "image") {
+    return renderImagePreview(element, "md-element rendered inline image image-preview", common);
   }
 
   return `<span class="md-element rendered inline link" title="${escapeHtml(
@@ -638,6 +781,18 @@ function renderEditingElement(element: MarkdownElement): string {
     return renderWrappedEditingElement(element, 1, common);
   }
 
+  if (element.type === "image") {
+    return `<span ${common}>${renderToken("![", element.start)}${renderSourceRun(
+      element.text,
+      element.contentStart,
+      "content-run",
+    )}${renderToken("](", element.contentEnd)}${renderSourceRun(
+      element.url ?? "",
+      element.urlStart ?? element.contentEnd + 2,
+      "url-run",
+    )}${renderToken(")", element.end - 1)}</span>`;
+  }
+
   return `<span ${common}>${renderToken("[", element.start)}${renderSourceRun(
     element.text,
     element.contentStart,
@@ -661,6 +816,22 @@ function renderWrappedEditingElement(
     markdown.slice(element.contentEnd, element.end),
     element.end - tokenSize,
   )}</span>`;
+}
+
+function renderImagePreview(
+  element: MarkdownElement,
+  className: string,
+  attributes: string,
+): string {
+  const alt = escapeHtml(element.text);
+  const imageUrl = escapeHtml(element.url ?? "");
+  const imageTitle = alt ? `${alt} - ${imageUrl}` : imageUrl;
+
+  return `<span class="${className}" title="${escapeHtml(
+    imageTitle,
+  )}" data-alt="${alt}" data-url="${imageUrl}" ${attributes}><img src="${escapeHtml(
+    element.url ?? "",
+  )}" alt="${alt}" loading="lazy" /></span>`;
 }
 
 function renderToken(value: string, start: number): string {
@@ -890,9 +1061,39 @@ function moveOutOfActiveRule(key: "ArrowUp" | "ArrowDown", index: number): boole
     return false;
   }
 
+  const targetElement = findElementForRuleTargetLine(targetLine, key);
+  if (targetElement) {
+    activeElementIds = new Set([targetElement.element.id]);
+    render(targetElement.caret);
+    return true;
+  }
+
   activeElementIds.clear();
   render(key === "ArrowUp" ? targetLine.end : targetLine.start);
   return true;
+}
+
+function findElementForRuleTargetLine(
+  line: { text: string; start: number; end: number },
+  key: "ArrowUp" | "ArrowDown",
+): { element: MarkdownElement; caret: number } | null {
+  if (key === "ArrowDown") {
+    const lineBlock = findLineBlockAt(line.start);
+    if (lineBlock) {
+      return { element: lineBlock, caret: lineBlock.contentStart };
+    }
+
+    const rightElement = findElementAtBoundary(line.start, "right");
+    return rightElement ? { element: rightElement, caret: rightElement.contentStart } : null;
+  }
+
+  const containingBlock = findMultilineBlockContainingLine(line.start, line.end);
+  if (containingBlock) {
+    return { element: containingBlock, caret: containingBlock.contentEnd };
+  }
+
+  const leftElement = findElementAtBoundary(line.end, "left");
+  return leftElement ? { element: leftElement, caret: leftElement.contentEnd } : null;
 }
 
 function isArrowNavigationKey(
@@ -1063,21 +1264,177 @@ function handlePointerDown(event: PointerEvent): void {
   }
 
   event.preventDefault();
-  const fallback = Number(renderedElement.dataset.start);
+  const fallback =
+    renderedElement.dataset.elementType === "image"
+      ? Number(renderedElement.dataset.urlEnd)
+      : Number(renderedElement.dataset.end);
   activeElementIds = new Set([id]);
   render(fallback);
 }
 
-function handlePaste(event: ClipboardEvent): void {
+async function handlePaste(event: ClipboardEvent): Promise<void> {
   const selection = readSelection();
   if (!selection) {
     return;
   }
 
-  event.preventDefault();
   const text = event.clipboardData?.getData("text/plain") ?? "";
-  const range = selection.collapsed ? selection : resolveSelectionForMutation(selection);
-  replaceRange(range.start, range.end, text);
+  if (text) {
+    event.preventDefault();
+    const range = selection.collapsed ? selection : resolveSelectionForMutation(selection);
+    replaceRange(range.start, range.end, text);
+    return;
+  }
+
+  const imageFiles = getImageFiles(event.clipboardData);
+  if (imageFiles.length === 0) {
+    return;
+  }
+
+  event.preventDefault();
+  await insertClipboardImageFiles(imageFiles);
+}
+
+function handleDragOver(event: DragEvent): void {
+  if (!hasImageFile(event.dataTransfer)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.dataTransfer!.dropEffect = "copy";
+}
+
+function handleBrowserDrop(event: DragEvent): void {
+  if (!hasImageFile(event.dataTransfer)) {
+    return;
+  }
+
+  event.preventDefault();
+  updateStatus("Use the desktop app drop target to copy local images into assets");
+}
+
+async function handleTauriDragDrop(event: DragDropEvent): Promise<void> {
+  if (event.type !== "drop") {
+    return;
+  }
+
+  const imagePaths = event.paths.filter(isLikelyImagePath);
+  if (imagePaths.length === 0) {
+    return;
+  }
+
+  await insertDroppedImagePaths(imagePaths);
+}
+
+async function insertDroppedImagePaths(paths: string[]): Promise<void> {
+  if (!isTauri()) {
+    updateStatus("Image assets are available in the desktop app");
+    return;
+  }
+
+  try {
+    const snippets = await Promise.all(
+      paths.map(async (sourcePath) => {
+        const prepared = await invoke<PreparedImageAsset>("prepare_image_asset", {
+          sourcePath,
+          documentPath: editorContext.documentPath,
+          projectRoot: editorContext.projectRoot,
+        });
+        return markdownImageSnippet(altFromPath(sourcePath), prepared.markdownPath);
+      }),
+    );
+
+    insertMarkdownAtSelection(snippets.join("\n"));
+    updateStatus(paths.length === 1 ? "Image inserted" : `${paths.length} images inserted`);
+  } catch (error) {
+    updateStatus(`Image insert failed: ${String(error)}`);
+  }
+}
+
+async function insertClipboardImageFiles(files: File[]): Promise<void> {
+  if (!isTauri()) {
+    updateStatus("Image paste needs the desktop app to copy into assets");
+    return;
+  }
+
+  try {
+    const snippets = await Promise.all(
+      files.map(async (file, index) => {
+        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+        const prepared = await invoke<PreparedImageAsset>("save_image_asset", {
+          bytes,
+          suggestedName: file.name || `pasted-image-${index + 1}.${extensionFromMime(file.type)}`,
+          documentPath: editorContext.documentPath,
+        });
+        return markdownImageSnippet(altFromPath(file.name || "pasted image"), prepared.markdownPath);
+      }),
+    );
+
+    insertMarkdownAtSelection(snippets.join("\n"));
+    updateStatus(files.length === 1 ? "Image pasted into assets" : `${files.length} images pasted into assets`);
+  } catch (error) {
+    updateStatus(`Image paste failed: ${String(error)}`);
+  }
+}
+
+function insertMarkdownAtSelection(value: string): void {
+  const selection = readSelection();
+  const range = selection
+    ? selection.collapsed
+      ? selection
+      : resolveSelectionForMutation(selection)
+    : { start: markdown.length, end: markdown.length, collapsed: true };
+
+  replaceRange(range.start, range.end, value);
+}
+
+function getImageFiles(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) {
+    return [];
+  }
+
+  return [...dataTransfer.files].filter((file) => file.type.startsWith("image/"));
+}
+
+function hasImageFile(dataTransfer: DataTransfer | null): boolean {
+  return getImageFiles(dataTransfer).length > 0;
+}
+
+function isLikelyImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path);
+}
+
+function markdownImageSnippet(alt: string, path: string): string {
+  return `![${escapeMarkdownLabel(alt)}](${path})`;
+}
+
+function altFromPath(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? "image";
+  return name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "image";
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+}
+
+function extensionFromMime(mime: string): string {
+  if (mime === "image/jpeg") {
+    return "jpg";
+  }
+  if (mime === "image/gif") {
+    return "gif";
+  }
+  if (mime === "image/webp") {
+    return "webp";
+  }
+  if (mime === "image/svg+xml") {
+    return "svg";
+  }
+  if (mime === "image/bmp") {
+    return "bmp";
+  }
+
+  return "png";
 }
 
 function handleMouseup(): void {
@@ -1320,12 +1677,24 @@ function findLineBlockAt(start: number): MarkdownElement | null {
   );
 }
 
+function findMultilineBlockContainingLine(start: number, end: number): MarkdownElement | null {
+  return (
+    elements.find(
+      (element) =>
+        (element.type === "table" || element.type === "codeblock") &&
+        start >= element.start &&
+        end <= element.end,
+    ) ?? null
+  );
+}
+
 function isInlineElement(element: MarkdownElement): boolean {
   return (
     element.type === "bold" ||
     element.type === "italic" ||
     element.type === "strike" ||
     element.type === "code" ||
+    element.type === "image" ||
     element.type === "link"
   );
 }
