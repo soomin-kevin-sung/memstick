@@ -1,0 +1,15 @@
+# Local dependencies
+/node_modules/
+
+# Frontend build output
+/dist/
+/dist-ssr/
+
+# Tauri build output
+/src-tauri/target/
+
+# Generated Tauri schemas
+/src-tauri/gen/
+
+# Local logs
+*.log
