@@ -779,12 +779,82 @@ function renderTableElement(element: MarkdownElement, common: string): string {
 
 function renderListItemElement(element: MarkdownElement, common: string): string {
   const isOrdered = element.listKind === "ordered";
-  const marker = isOrdered ? element.listMarker ?? "1." : "";
-  const indent = Math.floor((markdown.slice(element.start, element.contentStart).match(/^ */)?.[0].length ?? 0) / 2);
+  const indent = listIndentDepth(element);
+  const markerDepth = indent % 3;
+  const marker = isOrdered ? orderedListMarker(element, markerDepth) : "";
 
-  return `<span class="md-element rendered listItem list-${isOrdered ? "ordered" : "unordered"}" style="--list-indent: ${indent}" ${common}><span class="list-marker" aria-hidden="true">${escapeHtml(
+  return `<span class="md-element rendered listItem list-${
+    isOrdered ? "ordered" : "unordered"
+  } list-depth-${markerDepth}" style="--list-indent: ${indent}" ${common}><span class="list-marker" aria-hidden="true">${escapeHtml(
     marker,
   )}</span><span class="list-content">${escapeHtml(element.text)}</span></span>`;
+}
+
+function listIndentDepth(element: MarkdownElement): number {
+  const markerSource = markdown.slice(element.start, element.contentStart);
+  const indentLength = markerSource.match(/^ */)?.[0].length ?? 0;
+  return Math.floor(indentLength / 2);
+}
+
+function orderedListMarker(element: MarkdownElement, markerDepth: number): string {
+  const marker = element.listMarker ?? "1.";
+  const parsed = /^(\d+)([.)])$/.exec(marker);
+  if (!parsed) {
+    return marker;
+  }
+
+  const [, number, delimiter] = parsed;
+  const value = Number(number);
+  if (markerDepth === 1) {
+    return `${formatLowerAlpha(value)}${delimiter}`;
+  }
+  if (markerDepth === 2) {
+    return `${formatLowerRoman(value)}${delimiter}`;
+  }
+
+  return marker;
+}
+
+function formatLowerAlpha(value: number): string {
+  let remaining = Math.max(1, Math.floor(value));
+  let result = "";
+
+  while (remaining > 0) {
+    remaining -= 1;
+    result = String.fromCharCode(97 + (remaining % 26)) + result;
+    remaining = Math.floor(remaining / 26);
+  }
+
+  return result;
+}
+
+function formatLowerRoman(value: number): string {
+  let remaining = Math.max(1, Math.min(3999, Math.floor(value)));
+  const numerals: Array<[number, string]> = [
+    [1000, "m"],
+    [900, "cm"],
+    [500, "d"],
+    [400, "cd"],
+    [100, "c"],
+    [90, "xc"],
+    [50, "l"],
+    [40, "xl"],
+    [10, "x"],
+    [9, "ix"],
+    [5, "v"],
+    [4, "iv"],
+    [1, "i"],
+  ];
+  let result = "";
+
+  for (const [amount, numeral] of numerals) {
+    while (remaining >= amount) {
+      result += numeral;
+      remaining -= amount;
+    }
+  }
+
+  return result;
 }
 
 function renderEditingElement(element: MarkdownElement): string {

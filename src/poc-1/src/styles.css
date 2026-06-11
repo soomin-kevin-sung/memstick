@@ -278,6 +278,20 @@ h1 {
   background: #8a3f29;
 }
 
+.md-element.rendered.list-unordered.list-depth-1 .list-marker::before {
+  width: 0.46rem;
+  height: 0.12rem;
+  border-radius: 999px;
+  background: #8a3f29;
+}
+
+.md-element.rendered.list-unordered.list-depth-2 .list-marker::before {
+  width: 0.34rem;
+  height: 0.34rem;
+  border-radius: 1px;
+  background: #8a3f29;
+}
+
 .md-element.rendered.list-ordered .list-marker {
   display: block;
   color: #6f4b2d;
