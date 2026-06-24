@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the Memstick workspace and note windows",
+  "windows": ["main", "settings", "note-*"],
+  "permissions": ["core:default"]
+}
